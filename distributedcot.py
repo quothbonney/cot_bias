@@ -22,9 +22,6 @@ def get_device() -> torch.device:
     return torch.device("cuda", local_rank)
 
 def calculate_confidence(logits: List[torch.Tensor], answer_ids: torch.Tensor) -> float:
-    """
-    Calculate the confidence score (Δ).
-    """
     confidence_sum = 0.0
     valid_tokens = 0
     for t, token_id in enumerate(answer_ids):
@@ -45,9 +42,6 @@ def calculate_confidence(logits: List[torch.Tensor], answer_ids: torch.Tensor) -
     return confidence_sum / valid_tokens if valid_tokens > 0 else 0.0
 
 def aggregate_paths_based_on_scores(paths: List[Tuple[str, float]]) -> Tuple[str, float]:
-    """
-    Aggregate multiple paths based on their confidence scores.
-    """
     answer_scores = {}
     for answer, delta in paths:
         answer_scores[answer] = answer_scores.get(answer, 0) + delta
@@ -87,7 +81,7 @@ def distributed_cot_decode(
     device = get_device()
     model.to(device)
 
-    # Format the input
+    # Formattr
     if getattr(tokenizer, "chat_template", None):
         # Some tokenizers have a built-in chat_template
         input_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -113,16 +107,14 @@ def distributed_cot_decode(
     else:
         top_k_indices_gpu = torch.zeros(k, dtype=torch.long, device=device)
 
-    # GPU -> GPU broadcast so all ranks know the top-k token IDs
     dist.broadcast(top_k_indices_gpu, src=0)
 
-    # Each rank picks a slice of the top_k_indices
+    # each rank picks a slice of the top_k_indices
     chunk_size = (k + world_size - 1) // world_size  # ceil-div
     start_idx = rank * chunk_size
     end_idx = min(start_idx + chunk_size, k)
     local_indices = top_k_indices_gpu[start_idx:end_idx]
 
-    # Generate local paths on this rank
     local_paths = []
     for idx in local_indices:
         idx = idx.unsqueeze(0).unsqueeze(0)  # shape [1,1]
@@ -156,11 +148,10 @@ def distributed_cot_decode(
         confidence = calculate_confidence(output.scores, answer_ids)
         local_paths.append((answer_text, confidence))
 
-    # Now gather all local_paths to rank 0 via manual send/recv
-    # because `nccl` does not support CPU-based all_gather_object.
+    # gota gather all local_paths to rank 0 via manual send/recv because `nccl` does not support CPU-based all_gather_object.
     
     if rank != 0:
-        # Serialize local_paths via pickle
+        # serialize local_paths via pickle
         pickled = pickle.dumps(local_paths)
         size_tensor = torch.tensor([len(pickled)], dtype=torch.long, device=device)
         # 1) Send the size
@@ -179,16 +170,13 @@ def distributed_cot_decode(
         all_paths_flat.extend(local_paths)
 
         for src in range(1, world_size):
-            # 1) Receive size
             size_tensor = torch.zeros(1, dtype=torch.long, device=device)
             dist.recv(size_tensor, src=src)
             data_size = size_tensor.item()
 
-            # 2) Receive that many bytes
             data_tensor = torch.empty(data_size, dtype=torch.uint8, device=device)
             dist.recv(data_tensor, src=src)
 
-            # Move bytes to CPU, unpickle
             pickled_data = data_tensor.cpu().numpy().tobytes()
             sublist = pickle.loads(pickled_data)
             all_paths_flat.extend(sublist)
@@ -200,7 +188,7 @@ def distributed_cot_decode(
             return max(all_paths_flat, key=lambda x: x[1])
 
 ###############################################################################
-# Example main()
+#main()
 ###############################################################################
 
 def main():
